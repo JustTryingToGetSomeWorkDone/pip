@@ -54,6 +54,7 @@ class Resolver(BaseResolver):
         force_reinstall: bool,
         upgrade_strategy: str,
         py_version_info: tuple[int, ...] | None = None,
+        historical_store: bool = False,
     ):
         super().__init__()
         assert upgrade_strategy in self._allowed_strategies
@@ -68,6 +69,7 @@ class Resolver(BaseResolver):
             ignore_installed=ignore_installed,
             ignore_requires_python=ignore_requires_python,
             py_version_info=py_version_info,
+            historical_store=historical_store,
         )
         self.ignore_dependencies = ignore_dependencies
         self.upgrade_strategy = upgrade_strategy

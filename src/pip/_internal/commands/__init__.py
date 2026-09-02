@@ -80,6 +80,11 @@ commands_dict: dict[str, CommandInfo] = {
         "CacheCommand",
         "Inspect and manage pip's wheel cache.",
     ),
+    "store": CommandInfo(
+        "pip._internal.commands.store",
+        "StoreCommand",
+        "Inspect and manage historical package versions.",
+    ),
     "index": CommandInfo(
         "pip._internal.commands.index",
         "IndexCommand",

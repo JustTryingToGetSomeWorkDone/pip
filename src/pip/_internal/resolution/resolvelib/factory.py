@@ -29,8 +29,13 @@ from pip._internal.exceptions import (
     UnsupportedPythonVersion,
     UnsupportedWheel,
 )
+from pip._internal.historical_store import find_stored
 from pip._internal.index.package_finder import PackageFinder
-from pip._internal.metadata import BaseDistribution, get_default_environment
+from pip._internal.metadata import (
+    BaseDistribution,
+    get_default_environment,
+    get_environment,
+)
 from pip._internal.models.link import Link
 from pip._internal.models.wheel import Wheel
 from pip._internal.operations.prepare import RequirementPreparer
@@ -98,6 +103,7 @@ class Factory:
         ignore_installed: bool,
         ignore_requires_python: bool,
         py_version_info: tuple[int, ...] | None = None,
+        historical_store: bool = False,
     ) -> None:
         self._finder = finder
         self.preparer = preparer
@@ -107,11 +113,13 @@ class Factory:
         self._use_user_site = use_user_site
         self._force_reinstall = force_reinstall
         self._ignore_requires_python = ignore_requires_python
+        self._historical_store = historical_store
 
         self._build_failures: Cache[InstallationError] = {}
         self._link_candidate_cache: Cache[LinkCandidate] = {}
         self._editable_candidate_cache: Cache[EditableCandidate] = {}
         self._installed_candidate_cache: dict[str, AlreadyInstalledCandidate] = {}
+        self._historical_candidate_cache: dict[str, AlreadyInstalledCandidate] = {}
         self._extras_candidate_cache: dict[
             tuple[int, frozenset[NormalizedName]], ExtrasCandidate
         ] = {}
@@ -165,6 +173,21 @@ class Factory:
         except KeyError:
             base = AlreadyInstalledCandidate(dist, template, factory=self)
             self._installed_candidate_cache[dist.canonical_name] = base
+        if not extras:
+            return base
+        return self._make_extras_candidate(base, extras, comes_from=template)
+
+    def _make_candidate_from_historical_dist(
+        self,
+        dist: BaseDistribution,
+        extras: frozenset[str],
+        template: InstallRequirement,
+    ) -> Candidate:
+        try:
+            base = self._historical_candidate_cache[dist.canonical_name]
+        except KeyError:
+            base = AlreadyInstalledCandidate(dist, template, factory=self)
+            self._historical_candidate_cache[dist.canonical_name] = base
         if not extras:
             return base
         return self._make_extras_candidate(base, extras, comes_from=template)
@@ -268,30 +291,45 @@ class Factory:
             extras |= frozenset(ireq.extras)
 
         def _get_installed_candidate() -> Candidate | None:
-            """Get the candidate for the currently-installed version."""
+            """Get an ordinary, then historical, installed candidate."""
             # If --force-reinstall is set, we want the version from the index
             # instead, so we "pretend" there is nothing installed.
             if self._force_reinstall:
                 return None
-            try:
-                installed_dist = self._installed_dists[name]
-            except KeyError:
+            installed_dist = self._installed_dists.get(name)
+            if installed_dist is not None:
+                try:
+                    ordinary_matches = specifier.contains(
+                        installed_dist.version, prereleases=True
+                    )
+                except InvalidVersion as e:
+                    raise InvalidInstalledPackage(dist=installed_dist, invalid_exc=e)
+                if ordinary_matches:
+                    candidate = self._make_candidate_from_dist(
+                        dist=installed_dist,
+                        extras=extras,
+                        template=template,
+                    )
+                    if id(candidate) not in incompatible_ids:
+                        return candidate
+
+            if not self._historical_store:
                 return None
-
-            try:
-                # Don't use the installed distribution if its version
-                # does not fit the current dependency graph.
-                if not specifier.contains(installed_dist.version, prereleases=True):
-                    return None
-            except InvalidVersion as e:
-                raise InvalidInstalledPackage(dist=installed_dist, invalid_exc=e)
-
-            candidate = self._make_candidate_from_dist(
-                dist=installed_dist,
+            stored = find_stored(get_requirement(f"{name}{specifier}"))
+            if stored is None:
+                return None
+            historical_dist = get_environment([str(stored.path)]).get_distribution(name)
+            if historical_dist is None or historical_dist.version != stored.version:
+                logger.warning(
+                    "Ignoring invalid historical store entry at %s",
+                    stored.path,
+                )
+                return None
+            candidate = self._make_candidate_from_historical_dist(
+                dist=historical_dist,
                 extras=extras,
                 template=template,
             )
-            # The candidate is a known incompatibility. Don't use it.
             if id(candidate) in incompatible_ids:
                 return None
             return candidate

@@ -265,6 +265,9 @@ class RequirementCommand(IndexGroupCommand):
                 force_reinstall=force_reinstall,
                 upgrade_strategy=upgrade_strategy,
                 py_version_info=py_version_info,
+                historical_store=bool(
+                    getattr(options, "historical_store_resolver", False)
+                ),
             )
         import pip._internal.resolution.legacy.resolver
 

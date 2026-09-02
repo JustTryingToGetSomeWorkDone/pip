@@ -9,6 +9,7 @@ import site
 from optparse import SUPPRESS_HELP, Values
 from pathlib import Path
 
+from pip._vendor.packaging.requirements import InvalidRequirement, Requirement
 from pip._vendor.packaging.utils import canonicalize_name
 from pip._vendor.requests.exceptions import InvalidProxyURL
 from pip._vendor.rich import print_json
@@ -23,6 +24,7 @@ import pip._internal.self_outdated_check  # noqa: F401
 from pip._internal.cache import WheelCache
 from pip._internal.cli import cmdoptions
 from pip._internal.cli.cmdoptions import make_target_python
+from pip._internal.cli.progress_bars import BarType
 from pip._internal.cli.req_command import (
     RequirementCommand,
     with_cleanup,
@@ -32,6 +34,12 @@ from pip._internal.exceptions import (
     CommandError,
     InstallationError,
     InstallWheelBuildError,
+)
+from pip._internal.historical_store import (
+    find_ordinary,
+    find_stored,
+    project_requirements,
+    store_destination,
 )
 from pip._internal.locations import get_scheme
 from pip._internal.metadata import BaseEnvironment, get_environment
@@ -279,7 +287,16 @@ class InstallCommand(RequirementCommand):
         )
 
     @with_cleanup
-    def run(self, options: Values, args: list[str]) -> int:
+    def run(self, options: Values, args: list[str]) -> int:  # noqa: PLR0912
+        historical_store = bool(getattr(options, "historical_store", False))
+        if args and not historical_store and not any(
+            (options.target_dir, options.root_path, options.prefix_path)
+        ):
+            args, historical_store = self._apply_project_requirements(args)
+            if not args:
+                return SUCCESS
+        options.historical_store_resolver = historical_store
+
         if options.use_user_site and options.target_dir is not None:
             raise CommandError("Can not combine '--user' and '--target'")
 
@@ -309,13 +326,16 @@ class InstallCommand(RequirementCommand):
         cmdoptions.check_release_control_exclusive(options)
 
         logger.verbose("Using %s", get_pip_version())
-        options.use_user_site = decide_user_install(
-            options.use_user_site,
-            prefix_path=options.prefix_path,
-            target_dir=options.target_dir,
-            root_path=options.root_path,
-            isolated_mode=options.isolated_mode,
-        )
+        if historical_store:
+            options.use_user_site = False
+        else:
+            options.use_user_site = decide_user_install(
+                options.use_user_site,
+                prefix_path=options.prefix_path,
+                target_dir=options.target_dir,
+                root_path=options.root_path,
+                isolated_mode=options.isolated_mode,
+            )
 
         target_temp_dir: TempDirectory | None = None
         target_temp_dir_path: str | None = None
@@ -448,7 +468,9 @@ class InstallCommand(RequirementCommand):
             # Check for conflicts in the package set we're installing.
             conflicts: ConflictDetails | None = None
             should_warn_about_conflicts = (
-                not options.ignore_dependencies and options.warn_about_conflicts
+                not options.ignore_dependencies
+                and options.warn_about_conflicts
+                and not historical_store
             )
             if should_warn_about_conflicts:
                 conflicts = self._determine_conflicts(to_install)
@@ -459,33 +481,47 @@ class InstallCommand(RequirementCommand):
             if options.target_dir or options.prefix_path:
                 warn_script_location = False
 
-            installed = install_given_reqs(
-                to_install,
-                root=options.root_path,
-                home=target_temp_dir_path,
-                prefix=options.prefix_path,
-                warn_script_location=warn_script_location,
-                use_user_site=options.use_user_site,
-                pycompile=options.compile,
-                progress_bar=options.progress_bar,
-            )
+            if historical_store:
+                installed_summary = self._install_historical_requirements(
+                    to_install,
+                    pycompile=options.compile,
+                    progress_bar=options.progress_bar,
+                )
+                installed = []
+                env = None
+            else:
+                installed = install_given_reqs(
+                    to_install,
+                    root=options.root_path,
+                    home=target_temp_dir_path,
+                    prefix=options.prefix_path,
+                    warn_script_location=warn_script_location,
+                    use_user_site=options.use_user_site,
+                    pycompile=options.compile,
+                    progress_bar=options.progress_bar,
+                )
 
-            lib_locations = get_lib_location_guesses(
-                user=options.use_user_site,
-                home=target_temp_dir_path,
-                root=options.root_path,
-                prefix=options.prefix_path,
-                isolated=options.isolated_mode,
-            )
-            env = get_environment(lib_locations)
+                lib_locations = get_lib_location_guesses(
+                    user=options.use_user_site,
+                    home=target_temp_dir_path,
+                    root=options.root_path,
+                    prefix=options.prefix_path,
+                    isolated=options.isolated_mode,
+                )
+                env = get_environment(lib_locations)
 
             if conflicts is not None:
                 self._warn_about_conflicts(
                     conflicts,
                     resolver_variant=self.determine_resolver_variant(options),
                 )
-            if summary := installed_packages_summary(installed, env):
-                write_output(summary)
+            if historical_store:
+                if installed_summary:
+                    write_output("Successfully installed %s", installed_summary)
+            else:
+                assert env is not None
+                if summary := installed_packages_summary(installed, env):
+                    write_output(summary)
         except OSError as error:
             show_traceback = self.verbosity >= 1
 
@@ -506,6 +542,82 @@ class InstallCommand(RequirementCommand):
         if options.root_user_action == "warn":
             warn_if_run_as_root()
         return SUCCESS
+
+    def _apply_project_requirements(self, args: list[str]) -> tuple[list[str], bool]:
+        requirements = project_requirements()
+        if not requirements or not args:
+            return args, False
+
+        requested = []
+        for text in args:
+            try:
+                requirement = Requirement(text)
+            except InvalidRequirement:
+                return args, False
+            if requirement.url is not None:
+                return args, False
+            authoritative = requirements.get(canonicalize_name(requirement.name))
+            if authoritative is None:
+                return args, False
+            requested.append(authoritative)
+
+        result = []
+        needs_store = False
+        for requirement in requested:
+            if find_ordinary(requirement) is not None:
+                result.append(str(requirement))
+                continue
+            stored = find_stored(requirement)
+            if stored is not None:
+                logger.info(
+                    "Requirement already satisfied by historical store: %s in %s",
+                    requirement,
+                    stored.path,
+                )
+                continue
+            result.append(str(requirement))
+            needs_store = True
+        return result, needs_store
+
+    def _install_historical_requirements(
+        self,
+        requirements: list[InstallRequirement],
+        *,
+        pycompile: bool,
+        progress_bar: BarType,
+    ) -> str:
+        installed = []
+        for requirement in requirements:
+            name = str(requirement.metadata["Name"])
+            version = str(requirement.metadata["Version"])
+            exact = Requirement(f"{name}=={version}")
+            existing = find_stored(exact)
+            if existing is not None:
+                logger.info(
+                    "Requirement already satisfied by historical store: %s in %s",
+                    exact,
+                    existing.path,
+                )
+                continue
+
+            target_temp_dir = TempDirectory(kind="target")
+            self.enter_context(target_temp_dir)
+            requirement.should_reinstall = False
+            install_given_reqs(
+                [requirement],
+                root=None,
+                home=target_temp_dir.path,
+                prefix=None,
+                warn_script_location=False,
+                use_user_site=False,
+                pycompile=pycompile,
+                progress_bar=progress_bar,
+            )
+            destination = store_destination(name, version)
+            self._handle_target_dir(str(destination), target_temp_dir, False)
+            logger.info("Stored %s %s in %s", name, version, destination)
+            installed.append(f"{name}-{version}")
+        return " ".join(sorted(installed))
 
     def _handle_target_dir(
         self, target_dir: str, target_temp_dir: TempDirectory, upgrade: bool

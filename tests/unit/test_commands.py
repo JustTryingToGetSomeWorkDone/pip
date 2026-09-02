@@ -20,6 +20,7 @@ EXPECTED_INDEX_GROUP_COMMANDS = [
     "install",
     "list",
     "lock",
+    "store",
     "wheel",
 ]
 
@@ -70,6 +71,7 @@ def test_session_commands() -> None:
         "uninstall",
         "wheel",
     ]
+    expected.insert(-2, "store")
     check_commands(is_session_command, expected)
 
 
@@ -140,7 +142,10 @@ def test_requirement_commands() -> None:
     def is_requirement_command(command: Command) -> bool:
         return isinstance(command, RequirementCommand)
 
-    check_commands(is_requirement_command, ["download", "install", "lock", "wheel"])
+    check_commands(
+        is_requirement_command,
+        ["download", "install", "lock", "store", "wheel"],
+    )
 
 
 @pytest.mark.parametrize("flag", ["", "--outdated", "--uptodate"])
