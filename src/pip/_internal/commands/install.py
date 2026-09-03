@@ -517,7 +517,10 @@ class InstallCommand(RequirementCommand):
                 )
             if historical_store:
                 if installed_summary:
-                    write_output("Successfully installed %s", installed_summary)
+                    write_output(
+                        "Successfully installed into historical store: %s",
+                        installed_summary,
+                    )
             else:
                 assert env is not None
                 if summary := installed_packages_summary(installed, env):
@@ -612,6 +615,7 @@ class InstallCommand(RequirementCommand):
                 use_user_site=False,
                 pycompile=pycompile,
                 progress_bar=progress_bar,
+                destination_description="historical store",
             )
             destination = store_destination(name, version)
             self._handle_target_dir(str(destination), target_temp_dir, False)

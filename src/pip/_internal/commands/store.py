@@ -14,6 +14,7 @@ from pip._internal.historical_store import (
     iter_stored_distributions,
 )
 from pip._internal.utils.logging import getLogger
+from pip._internal.utils.misc import tabulate, write_output
 
 logger = getLogger(__name__)
 
@@ -56,8 +57,18 @@ class StoreCommand(InstallCommand):
     def list_store(self, options: Values, args: list[str]) -> int:
         if args:
             raise CommandError("Too many arguments")
-        for distribution in iter_stored_distributions():
-            logger.info("%-20s %s", distribution.name, distribution.version)
+        distributions = iter_stored_distributions()
+        if not distributions:
+            return SUCCESS
+        rows = [["Package", "Version"]]
+        rows.extend(
+            [distribution.name, str(distribution.version)]
+            for distribution in distributions
+        )
+        output, sizes = tabulate(rows)
+        output.insert(1, " ".join("-" * size for size in sizes))
+        for line in output:
+            write_output(line)
         return SUCCESS
 
     def show_store(self, options: Values, args: list[str]) -> int:

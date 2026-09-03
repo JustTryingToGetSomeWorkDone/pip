@@ -32,7 +32,7 @@ def test_store_commands_list_show_and_remove(script: PipTestEnvironment) -> None
     store = configure_store_home(script)
     wheel = create_basic_wheel_for_package(script, "foo", "2.0")
 
-    script.pip(
+    install_result = script.pip(
         "store",
         "install",
         "foo==2.0",
@@ -44,7 +44,20 @@ def test_store_commands_list_show_and_remove(script: PipTestEnvironment) -> None
     destination = store / "foo" / "2.0"
     assert (destination / "foo" / "__init__.py").is_file()
     assert not (script.site_packages_path / "foo").exists()
-    assert "foo" in script.pip("store", "list").stdout
+    assert (
+        "Installing collected packages into historical store: foo"
+        in install_result.stdout
+    )
+    assert (
+        "Successfully installed into historical store: foo-2.0"
+        in install_result.stdout
+    )
+    listed = script.pip("store", "list").stdout
+    assert listed.splitlines() == [
+        "Package Version",
+        "------- -------",
+        "foo     2.0",
+    ]
     shown = script.pip("store", "show", "foo").stdout
     assert shown.splitlines() == ["foo", "  2.0"]
 

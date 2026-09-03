@@ -44,6 +44,7 @@ def install_given_reqs(
     use_user_site: bool,
     pycompile: bool,
     progress_bar: BarType,
+    destination_description: str | None = None,
 ) -> list[InstallationResult]:
     """
     Install everything in the given list.
@@ -53,8 +54,12 @@ def install_given_reqs(
     to_install = collections.OrderedDict(_validate_requirements(requirements))
 
     if to_install:
+        destination = (
+            f" into {destination_description}" if destination_description else ""
+        )
         logger.info(
-            "Installing collected packages: %s",
+            "Installing collected packages%s: %s",
+            destination,
             ", ".join(to_install.keys()),
         )
 
