@@ -24,10 +24,10 @@ class StoreCommand(InstallCommand):
 
     ignore_require_venv = True
     usage = """
-        pip store list
-        pip store show <distribution>
-        pip store install <requirement> [package-index-options] ...
-        pip store remove "<distribution>==<version>"
+        %prog list
+        %prog show <distribution>
+        %prog install <requirement> [package-index-options] ...
+        %prog remove <distribution>==<version>
     """
 
     def handler_map(  # type: ignore[override]
