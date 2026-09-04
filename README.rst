@@ -50,6 +50,10 @@ pip's normal indexes, caches, resolution, and build process when a matching
 release is not already present, then installs the result under the historical
 store path. It also stores resolved transitive dependencies. If a compatible
 release is already in the store, it is reused without downloading it.
+Because this destination does not modify the interpreter's managed
+environment, ``store install`` is also permitted when an
+``EXTERNALLY-MANAGED`` marker is present. Ordinary installation commands keep
+their existing PEP 668 behavior.
 
 ``store remove`` requires one exact ``<distribution>==<version>`` requirement
 and removes only that versioned directory. It can remove either a regular

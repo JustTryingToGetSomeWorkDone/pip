@@ -305,6 +305,7 @@ class InstallCommand(RequirementCommand):
         # --prefix disables the check, since there's no reliable way to locate
         # the EXTERNALLY-MANAGED file for those cases. An exception is also
         # made specifically for "--dry-run --report" for convenience.
+        # Historical-store installs are also outside the managed environment.
         installing_into_current_environment = (
             not (options.dry_run and options.json_report_file)
             and options.root_path is None
@@ -313,6 +314,7 @@ class InstallCommand(RequirementCommand):
         )
         if (
             installing_into_current_environment
+            and not historical_store
             and not options.override_externally_managed
         ):
             check_externally_managed()

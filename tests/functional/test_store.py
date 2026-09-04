@@ -1,6 +1,25 @@
+import textwrap
 from pathlib import Path
 
+import pytest
+
 from tests.lib import PipTestEnvironment, create_basic_wheel_for_package
+from tests.lib.venv import VirtualEnvironment
+
+
+@pytest.fixture
+def reject_externally_managed_installs(virtualenv: VirtualEnvironment) -> None:
+    virtualenv.sitecustomize = textwrap.dedent(
+        """\
+        from pip._internal.exceptions import ExternallyManagedEnvironment
+        from pip._internal.utils import misc
+
+        def check_externally_managed():
+            raise ExternallyManagedEnvironment("I am externally managed")
+
+        misc.check_externally_managed = check_externally_managed
+        """
+    )
 
 
 def configure_store_home(script: PipTestEnvironment) -> Path:
@@ -63,6 +82,27 @@ def test_store_commands_list_show_and_remove(script: PipTestEnvironment) -> None
 
     script.pip("store", "remove", "foo==2.0")
     assert not destination.exists()
+
+
+@pytest.mark.usefixtures("reject_externally_managed_installs")
+def test_store_install_does_not_modify_externally_managed_environment(
+    script: PipTestEnvironment,
+) -> None:
+    store = configure_store_home(script)
+    wheel = create_basic_wheel_for_package(script, "foo", "2.0")
+
+    result = script.pip(
+        "store",
+        "install",
+        "foo==2.0",
+        "--no-index",
+        "--find-links",
+        wheel.parent,
+    )
+
+    assert (store / "foo" / "2.0" / "foo" / "__init__.py").is_file()
+    assert not (script.site_packages_path / "foo").exists()
+    assert "I am externally managed" not in result.stderr
 
 
 def test_project_reuses_compatible_store_version(
